@@ -1,0 +1,5 @@
+path: "/slack"
+method: "POST"
+extra:
+  python:
+    source: "endpoints/nwslackbot.py"

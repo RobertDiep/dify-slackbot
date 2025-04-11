@@ -1,0 +1,45 @@
+settings:
+  - name: bot_token
+    type: secret-input
+    required: true
+    label:
+      en_US: Bot token
+      zh_Hans: Bot token
+      pt_BR: Bot token
+    placeholder:
+      en_US: Please input your Bot token
+      zh_Hans: 请输入你的 Bot token
+      pt_BR: Please input your Bot token
+
+  - name: signing_secret
+    type: secret-input
+    required: true
+    label:
+      en_US: Signing secret
+      zh_Hans: Signing secret
+      pt_BR: Signing secret
+    placeholder:
+      en_US: Please input your Signing secret
+      zh_Hans: 请输入你的 Signing secret
+      pt_BR: Please input your Signing secret
+
+  - name: slack_admin_ids
+    type: text-input
+    required: true
+    label: 
+      en_US: Slack admin IDs
+      zh_Han: Slack admin IDs
+      pt_BR: Slack admin IDs
+      ja_JP: Slack admin IDs
+
+  # - name: channel_config
+  #   type: text-input
+  #   required: true
+  #   label:
+  #     en_US: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+  #     zh_Hans: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+  #     pt_BR: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+  #     ja_JP: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+  
+endpoints:
+  - endpoints/nw-slackbot.yaml
