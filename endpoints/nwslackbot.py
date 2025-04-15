@@ -1,228 +1,171 @@
-import time
 import logging
-import json
-from typing import Mapping
-from werkzeug import Request, Response
+import sys
+import json 
+import time
+
 from dify_plugin import Endpoint
-from dify_plugin.config.logger_format import plugin_logger_handler
+from slack_sdk import WebClient
+from collections.abc import Mapping
+from werkzeug import Request, Response
+from slack_bolt import App, Ack, Say
 
-from slack_bolt import App
-
-from slack_bolt.request import BoltRequest
-from slack_bolt.response import BoltResponse
-
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+from .slack_utils import is_dm
+from .slack_utils import SlackRequestHandler
 
 class ConfigNotFound(Exception):
     pass
 
-class ConfigIncorrect(Exception):
-    pass
+logging.basicConfig(level=logging.DEBUG, handlers=[logging.StreamHandler(sys.stdout)])
 
-def to_bolt_request(req: Request) -> BoltRequest:
-    data = req.get_data(as_text=True)
-    logger.info(data)
-    return BoltRequest(
-        body=data,
-        query=req.query_string.decode('utf-8'),
-        headers=req.headers
-    )
+STORAGE_CONFIG_KEY = "config"
 
+class NwSlackEndpoint(Endpoint):
+    def __init__(self, session):
+        super().__init__(session)
 
-def to_werkzeug_response(bolt_resp: BoltResponse) -> Response:
-    resp: Response = Response(bolt_resp.body, bolt_resp.status)
-    for k, values in bolt_resp.headers.items():
-        if k.lower() == "content-type" and resp.headers.get("content-type") is not None:
-            # Remove the one set by Flask
-            resp.headers.pop("content-type")
-        for v in values:
-            resp.headers.add_header(k, v)
-    return resp
+    def _invoke(self, r: Request, values: Mapping, settings: Mapping):
+        logging.info("Incoming request")
 
-def is_dm(body):
-    authorization_id = body["authorizations"][0]["user_id"]
-    event_rcv_id = body["event"]["parent_user_id"]
-
-    return authorization_id == event_rcv_id
-
-def make_plaintext_block(text):
-    return {
-        "type": "section",
-        "text": {
-            "type": "plain_text",
-            "text": text,
-            "emoji": True
-        }
-    }
-
-def make_plaintext_input_block(name, description, multiline=True):
-    block = {
-        "type": "input",
-        "element": {
-            "type": "plain_text_input",
-            "multiline": multiline,
-            "action_id": name,
-        },
-        "label": {
-            "type": "plain_text",
-            "text": description,
-            "emoji": True
-        }
-    }
-    return block
-
-def make_url_block(name, description):
-    block = {
-        "type": "input",
-        "element": {
-            "type": "url_text_input",
-            "action_id": name,
-        },
-        "label": {
-            "type": "plain_text",
-            "text": description,
-            "emoji": True
-        }
-    }
-    return block
-
-def params_to_modal(config):
-    divider = {"type": "divider"}
-
-    blocks = {
-        "type": "modal",
-        "callback_id": config["dify_id"],
-        "title": {"type": "plain_text", "text": config["title"], "emoji": False},
-        "submit": {"type": "plain_text", "text": "Submit", "emoji": False},
-        "clear_on_close": True,
-        "close": {"type": "plain_text", "text": "Cancel", "emoji": True},
-        "blocks": [divider, make_plaintext_block(config["description"]), divider]
-    }
-    for param in config["parameters"]:
-        type_ = param["type"]
-        block = {}
-        if type_ == "plain_text":
-            block = make_plaintext_input_block(param["name"], param["description"])
-        elif type_ == "url_text_input":
-            pass
-        else:
-            raise ConfigIncorrect(f"Parameter type {type_} not implemented")
-
-        blocks["blocks"].append(block)
-
-    return blocks
-
-class SlackRequestHandler:
-    def __init__(self, app: App):
-        self.app = app
-
-    def handle(self, req: Request) -> Response:
-        if req.method == "GET":
-            # oauth flow is not implemented yet
-            pass
-        elif req.method == "POST":
-            bolt_resp = self.app.dispatch(to_bolt_request(req))
-            return to_werkzeug_response(bolt_resp)
-        return Response("Not found", 404)
-
-
-class NwSlackbotEndpoint(Endpoint):
-
-    def _invoke(self, r: Request, values: Mapping, settings: Mapping) -> Response:
-        """
-        Invokes the endpoint with the given request.
-        """
+        # set slack admins
+        self._slack_admins = settings.get("slack_admin_ids").split(",")
 
         # try to get config from storage
         try:
-            config = self.session.storage.get("config")
+            config = self.session.storage.get(STORAGE_CONFIG_KEY)
             self._slack_config = json.loads(config)
         except json.JSONDecodeError:
+            self.session.storage.set(STORAGE_CONFIG_KEY, b"{}")
             config = None
             self._slack_config = None
 
-        slack_app = App(token=settings.get("bot_token"), signing_secret=settings.get("signing_secret"))
+        app = App(token=settings.get("bot_token"), signing_secret=settings.get("signing_secret"))
 
-        @slack_app.event("app_mention")
-        def mention(body, say, logger):
-            event = body["event"]
-            channel_id = event["channel"]
-            user_id = event["user"]
-            text = event["text"]
-            msg_ts = event["ts"]
+        app.event("app_mention")(ack=self.handle_ack, lazy=[self.handle_mention])
+        app.event("message")(self.handle_dm)
 
-            try:
-                answer = self.start_workflow(channel_id, text)
-            except ConfigNotFound:
-                return say("No workflow associated with this channel.")
-
-            say(f"<@{user_id}>, {answer}", thread_ts=msg_ts)
-
-        @slack_app.event("message")
-        def msg(body, ack, say):
-            if not is_dm(body):
-                return ack()
-
-            event = body["event"]
-            message = event["text"]
-            sender_id = event["user"]
-            admins = settings.get("slack_admin_ids").split(",")
-
-            if sender_id not in admins:
-                return say("Not an admin, sorry.")
-
-            if "get config" in message:
-                try:
-                    config = self.session.storage.get("config").decode()
-                    logger.info(config)
-                    return say(config)
-                except Exception as e:
-                    logger.error(e, exc_info=True)
-                    return say("No config found.")
-
-            elif "set config" in message:
-                new_config = message.split("set config ")[1]
-                try:
-                    json.loads(new_config)
-                except json.JSONDecodeError:
-                    return say("Invalid JSON, try again.")
-
-                self.session.storage.set("config", new_config.encode("utf-8"))
-                return say("Config saved!")
-
-        handler = SlackRequestHandler(slack_app)
-
+        handler = SlackRequestHandler(app)
+        logging.debug("_invoke:return")
         return handler.handle(r)
 
-    def start_workflow(self, channel_id: str, message: str):
-        conf = None
+    def handle_ack(self, body: dict, say: Say, ack: Ack):
+        logging.debug("handle_ack")
+        msg_ts = body["event"]["ts"]
+        say("Got message, starting workflow", thread_ts=msg_ts)
 
-        if self._slack_config is None:
-            return "Bot is unconfigured, notify an admin."
+    def handle_mention(self, client: WebClient, body: dict):
+        logging.debug("handle_mention")
+        event = body["event"]
+        channel_id = event["channel"]
+        user_id = event["user"]
+        text = event["text"]
+        msg_ts = event["ts"]
 
-        for c in self._slack_config:
-            if c['channel_id'].lower() == channel_id.lower():
-                conf = c
+        in_thread = "thread_ts" in event
+        conversation_id = None
 
-        if conf is None:
-            raise ConfigNotFound("Channel -> workflow ID mapping not found")
+        if in_thread:
+            conversation_id = "71a0dc14-c060-49bd-b6f7-0f9bdbcaa8be"
+            messages = {"messages": []}
+            x = client.conversations_replies(channel=channel_id, ts=event["thread_ts"], include_all_metadata=True)
+            time.sleep(2)
+            logging.debug(f"Messages: {messages}")
+
+            for message in messages["messages"]:
+                if "metadata" not in message:
+                    continue
+
+                meta = message["metadata"]
+                if meta["event_type"] != "dify_conversation_started" or "event_payload" not in meta:
+                    continue
+
+                conversation_id = meta["event_payload"]["dify_conversation_id"]
+                break
 
         try:
-            if c["dify_type"] == "chatflow":
-                # first try to invoke a chatflow/chatapp
+            logging.info(f"Starting workflow for {channel_id}, {text}, {conversation_id}")
+            answer = self.start_workflow(channel_id, text, conversation_id)
+            logging.debug(f"handle_mention:answer: {answer}")
+        except ConfigNotFound as e:
+            client.chat_postMessage(text=str(e), channel=channel_id, thread_ts=msg_ts)
+
+        if not in_thread and "conversation_id" in answer:
+            metadata = {
+                "event_type": "dify_conversation_started",
+                "event_payload": {
+                    "dify_conversation_id": answer["conversation_id"],
+                }
+            }
+        else:
+            metadata = None
+
+        logging.debug(f"Posting response {answer['answer']}")
+        client.chat_postMessage(text=f"<@{user_id}>, {answer['answer']}", thread_ts=msg_ts, channel=channel_id, metadata=metadata)
+
+    def handle_dm(self, ack: Ack, say: Say, client: WebClient, body: dict):
+        if not is_dm(body):
+            ack()
+            return
+
+        event = body["event"]
+        message = event["text"]
+        sender_id = event["user"]
+
+        if sender_id not in self._slack_admins:
+            say("Not an admin, sorry.")
+            return
+
+        if "get config" in message:
+            try:
+                config = self.session.storage.get("config").decode()
+                logging.info(config)
+                say(config)
+                return
+            except Exception as e:
+                logging.error(e, exc_info=True)
+                say("No config found.")
+                return
+
+        elif "set config" in message:
+            new_config = message.split("set config ")[1]
+            try:
+                json.loads(new_config)
+                logging.info(new_config)
+            except json.JSONDecodeError as e:
+                say(f"Invalid JSON, try again.: {e}")
+                return
+
+            self.session.storage.set(STORAGE_CONFIG_KEY, new_config.encode("utf-8"))
+            say("Config saved!")
+            return
+
+    def start_workflow(self, channel_id: str, message: str, conversation_id: str | None = None):        
+        conf = None
+        if self._slack_config is None:
+            raise ConfigNotFound("Bot is unconfigured, or channel -> workflow mapping not found")
+
+        for c in self._slack_config:
+            if c["channel_id"] == channel_id:
+                conf = c
+                break
+
+        if conf is None:
+            raise ConfigNotFound("Channel not found in config")
+
+        try:
+            if conf["dify_type"] == "chatflow":
+                logging.info(f"Workflow: {conf['dify_id']}, msg: {message}, conv_id: {conversation_id}")
+
                 response = self.session.app.chat.invoke(
                     app_id=conf["dify_id"],
                     query=message,
                     inputs={},
-                    response_mode="blocking"
+                    response_mode="blocking",
+                    conversation_id=conversation_id
                 )
 
-                logger.info(response)
-
-                return response.get("answer")
-            elif c["dify_type"] == "workflow":
+                logging.debug(f"start_workflow:response: {response}")
+                return response
+            elif conf["dify_type"] == "workflow":
                 # then try to invoke a workflow, this is currently broken since workflows require input
                 response = self.session.app.workflow.invoke(
                     app_id=conf["dify_id"],
@@ -230,8 +173,7 @@ class NwSlackbotEndpoint(Endpoint):
                     response_mode="blocking"
                 )
 
-                logger.info(response)
-
-                return response.get('answer')
+                logging.info(response)
         except Exception as e:
-            return f"Exception: {e}"
+            logging.error(e, stack_info=True)
+            return {"answer": f"Exception: {e}"}
