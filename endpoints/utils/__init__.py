@@ -1,5 +1,5 @@
 from .slackrequesthandler import SlackRequestHandler
-
+from .logger_formatter import SlackbotPluginLoggerFormatter
 
 def is_dm(body):
     authorization_id = body["authorizations"][0]["user_id"]
