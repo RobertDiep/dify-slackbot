@@ -74,13 +74,15 @@ class NwSlackEndpoint(Endpoint):
             # client.chat_postMessage(text="I currently can't read threads due to a bug.", channel=channel_id, thread_ts=event["thread_ts"])
             # return
 
-            post_body = {"channel": channel_id, "ts": event["thread_ts"], "limit": 10, "include_all_metadata": 1, "team_id": body["team_id"]}
+            # using httpx
+            # post_body = {"channel": channel_id, "ts": event["thread_ts"], "limit": 10, "include_all_metadata": 1, "team_id": body["team_id"]}
+            # m = httpx.post(url="https://slack.com/api/conversations.replies", headers={"Authorization": f"Bearer {self._bot_token}"}, data=post_body, )
+            # response = m.json()
+            # self.session.writer.log({"message": "test"})
+            # self.session.writer.heartbeat()
 
-            m = httpx.post(url="https://slack.com/api/conversations.replies", headers={"Authorization": f"Bearer {self._bot_token}"}, data=post_body, )
-            response = m.json()
-            self.session.writer.log({"message": "test"})
-            self.session.writer.heartbeat()
-            # messages = client.conversations_replies(channel=channel_id, ts=event["thread_ts"], include_all_metadata=True)
+            # Original method
+            response = client.conversations_replies(channel=channel_id, ts=event["thread_ts"], include_all_metadata=True)
 
             logger.debug(f"Messages: {response}")
 
@@ -99,7 +101,7 @@ class NwSlackEndpoint(Endpoint):
         try:
             logger.info(f"Starting workflow for {channel_id}, {text}, {conversation_id}")
             self.session.writer.log({"message": f"Starting workflow for {channel_id}, {text}, {conversation_id}, inst: {self.session.install_method}, {self.session.session_id}"})
-            
+
             answer = self.start_workflow(channel_id, text, conversation_id)
             logger.debug(f"handle_mention:answer: {answer}")
         except ConfigNotFound as e:
