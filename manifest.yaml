@@ -1,4 +1,4 @@
-version: 0.0.2
+version: 0.0.4
 type: plugin
 author: rdiepeveen
 name: nw-slackbot
@@ -37,7 +37,7 @@ plugins:
   endpoints:
     - group/nw-slackbot.yaml
 meta:
-  version: 0.0.1
+  version: 0.0.2
   arch:
     - amd64
     - arm64

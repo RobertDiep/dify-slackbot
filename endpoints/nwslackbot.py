@@ -1,18 +1,17 @@
 import logging
-import sys
 import json
-import time
 import threading
-import httpx
+import re
 
 from dify_plugin import Endpoint
 from slack_sdk import WebClient
+from slack_sdk.signature import SignatureVerifier
+from slack_sdk.errors import SlackApiError
 from collections.abc import Mapping
 from werkzeug import Request, Response
-from slack_bolt import App, Ack, Say
 
-from .utils import is_dm
-from .utils import SlackRequestHandler
+from .utils import is_dm, is_self_event
+
 
 class ConfigNotFound(Exception):
     pass
@@ -22,14 +21,14 @@ STORAGE_CONFIG_KEY = "config"
 
 logger = logging.getLogger(__name__)
 
+
 class NwSlackEndpoint(Endpoint):
     def __init__(self, session):
         super().__init__(session)
         self.lock = threading.Lock()
 
     def _invoke(self, r: Request, values: Mapping, settings: Mapping) -> Response:
-        logger.info("Incoming request")
-
+        logger.info(r)
         # set slack admins
         self._slack_admins = settings.get("slack_admin_ids").split(",")
 
@@ -40,109 +39,134 @@ class NwSlackEndpoint(Endpoint):
         except json.JSONDecodeError:
             self.session.storage.set(STORAGE_CONFIG_KEY, b"{}")
             config = None
+        except Exception as e:
+            logger.exception("Storage", e)
             self._slack_config = None
 
-        self._bot_token = settings.get("bot_token")
-        app = App(token=self._bot_token, signing_secret=settings.get("signing_secret"))
+        #
+        # Slack stuff
+        #
 
-        app.event("app_mention")(self.handle_mention)
-        app.event("message")(self.handle_dm)
+        # if retry due to a HTTP timeout, the workflow might be too long so return 200 OK
+        retry_num = r.headers.get("X-Slack-Retry-Num")
+        if r.headers.get("X-Slack-Retry-Reason") == "http_timeout" and (
+            retry_num is not None and int(retry_num) > 0
+        ):
+            return Response(status=200, response="ok")
 
-        handler = SlackRequestHandler(app)
-        logger.debug("return")
-        return handler.handle(r)
+        # Verify request
+        verifier = SignatureVerifier(signing_secret=settings.get("signing_secret"))
+        signature = r.headers.get("X-Slack-Signature")
+        timestamp = r.headers.get("X-Slack-Request-Timestamp")
 
-    def handle_ack(self, body: dict, say: Say, ack: Ack):
-        logger.debug("handle_ack")
-        ack()
+        if not verifier.is_valid(r.get_data(), timestamp, signature):
+            logger.error("Invalid signature for Slack request")
+            return Response(status=200, response="ok")
+
+        # handle data
+        webclient = WebClient(token=settings.get("bot_token"))
+        data = r.get_json()
+        req_type = data.get("type")
+        if req_type == "url_verification":
+            return Response(
+                response=json.dumps({"challenge": data.get("challenge")}),
+                status=200,
+                content_type="application/json",
+            )
+
+        elif req_type == "event_callback":
+            event = data.get("event")
+            event_type = event.get("type")
+
+            try:
+                match event_type:
+                    case "app_mention":
+                        self.handle_mention(body=data, client=webclient)
+                    case "message":
+                        self.handle_dm(body=data, client=webclient)
+            except SlackApiError as e:
+                logger.exception(e)
+            finally:
+                return Response(status=200, response="ok")
 
     def handle_mention(self, client: WebClient, body: dict):
         logger.debug("begin")
-        logger.debug(self.session.__dict__)
 
         event = body["event"]
         channel_id = event["channel"]
         user_id = event["user"]
-        text = event["text"]
+        text = re.sub(r"^<@[^>]+>\s*", "", event["text"])
         msg_ts = event["ts"]
 
         in_thread = "thread_ts" in event
-        conversation_id = None
+        thread_ts = event["thread_ts"] if in_thread else msg_ts
 
-        if in_thread:
-            # conversation_id = "71a0dc14-c060-49bd-b6f7-0f9bdbcaa8be"
-            # client.chat_postMessage(text="I currently can't read threads due to a bug.", channel=channel_id, thread_ts=event["thread_ts"])
-            # return
-
-            # using httpx
-            # post_body = {"channel": channel_id, "ts": event["thread_ts"], "limit": 10, "include_all_metadata": 1, "team_id": body["team_id"]}
-            # m = httpx.post(url="https://slack.com/api/conversations.replies", headers={"Authorization": f"Bearer {self._bot_token}"}, data=post_body, )
-            # response = m.json()
-            # self.session.writer.log({"message": "test"})
-            # self.session.writer.heartbeat()
-
-            # Original method
-            response = client.conversations_replies(channel=channel_id, ts=event["thread_ts"], include_all_metadata=True)
-
-            logger.debug(f"Messages: {response}")
-
-            for message in response['messages']:
-                logger.debug(f"m: {message}, {type(message)}")
-                if "metadata" not in message:
-                    continue
-
-                meta = message["metadata"]
-                if meta["event_type"] != "dify_conversation_started" or "event_payload" not in meta:
-                    continue
-
-                conversation_id = meta["event_payload"]["dify_conversation_id"]
-                break
-
+        conversation_id = self._get_conversation_id(channel_id, thread_ts)
         try:
-            logger.info(f"Starting workflow for {channel_id}, {text}, {conversation_id}")
-            self.session.writer.log({"message": f"Starting workflow for {channel_id}, {text}, {conversation_id}, inst: {self.session.install_method}, {self.session.session_id}"})
-
+            logger.info(
+                f"Starting workflow for {channel_id}, {text}, {conversation_id}"
+            )
             answer = self.start_workflow(channel_id, text, conversation_id)
             logger.debug(f"handle_mention:answer: {answer}")
         except ConfigNotFound as e:
             client.chat_postMessage(text=str(e), channel=channel_id, thread_ts=msg_ts)
 
-        if not in_thread and "conversation_id" in answer:
+        # set conversation id on new message
+        if "conversation_id" in answer:
+            logger.debug("Saving conversation id")
+            self._save_conversation_id(channel_id, thread_ts, answer["conversation_id"])
+
+            # Despite not using the conversation_id from Slack's metadata
+            # we still want to include it to the server.
             metadata = {
                 "event_type": "dify_conversation_started",
                 "event_payload": {
                     "dify_conversation_id": answer["conversation_id"],
-                }
+                },
             }
         else:
             metadata = None
 
         logger.debug(f"Posting response {answer['answer']}")
 
-        client.chat_postMessage(text=f"<@{user_id}>, {answer['answer']}", thread_ts=msg_ts, channel=channel_id, metadata=metadata)
+        client.chat_postMessage(
+            text=f"<@{user_id}>, {answer['answer']}",
+            thread_ts=msg_ts,
+            channel=channel_id,
+            metadata=metadata,
+        )
 
-    def handle_dm(self, ack: Ack, say: Say, client: WebClient, body: dict):
+    def handle_dm(self, client: WebClient, body: dict):
+        if is_self_event(body):
+            logger.debug("Self event, return")
+            return
+
         if not is_dm(body):
-            ack()
             return
 
         event = body["event"]
         message = event["text"]
         sender_id = event["user"]
+        receiver = sender_id
+        thread_ts = event["thread_ts"] if "thread_ts" in event else event["ts"]
 
         if sender_id not in self._slack_admins:
-            say("Not an admin, sorry.")
+            client.chat_postMessage(channel=receiver, text="Not an admin, sorry.")
             return
 
         if "get config" in message:
             try:
                 config = self.session.storage.get("config").decode()
                 logger.info(config)
-                say(config)
+                client.chat_postMessage(
+                    channel=receiver, thread_ts=thread_ts, text=config
+                )
                 return
             except Exception as e:
                 logger.error(e, exc_info=True)
-                say("No config found.")
+                client.chat_postMessage(
+                    channel=receiver, thread_ts=thread_ts, text="No config found."
+                )
                 return
 
         elif "set config" in message:
@@ -151,17 +175,27 @@ class NwSlackEndpoint(Endpoint):
                 json.loads(new_config)
                 logger.info(new_config)
             except json.JSONDecodeError as e:
-                say(f"Invalid JSON, try again.: {e}")
+                client.chat_postMessage(
+                    channel=receiver,
+                    thread_ts=thread_ts,
+                    text=f"Invalid JSON, try again.: {e}",
+                )
                 return
 
             self.session.storage.set(STORAGE_CONFIG_KEY, new_config.encode("utf-8"))
-            say("Config saved!")
+            client.chat_postMessage(
+                channel=receiver, thread_ts=thread_ts, text="Config saved!"
+            )
             return
 
-    def start_workflow(self, channel_id: str, message: str, conversation_id: str | None = None):     
+    def start_workflow(
+        self, channel_id: str, message: str, conversation_id: str | None = None
+    ):
         conf = None
         if self._slack_config is None:
-            raise ConfigNotFound("Bot is unconfigured, or channel -> workflow mapping not found")
+            raise ConfigNotFound(
+                "Bot is unconfigured, or channel -> workflow mapping not found"
+            )
 
         for c in self._slack_config:
             if c["channel_id"] == channel_id:
@@ -173,14 +207,16 @@ class NwSlackEndpoint(Endpoint):
 
         try:
             if conf["dify_type"] == "chatflow":
-                logger.info(f"Workflow: {conf['dify_id']}, msg: {message}, conv_id: {conversation_id}")
-                self.session.writer.log({"message": f"Workflow: {conf['dify_id']}, msg: {message}, conv_id: {conversation_id}"})
+                logger.info(
+                    f"Workflow: {conf['dify_id']}, msg: {message}, conv_id: {conversation_id}"
+                )
+
                 response = self.session.app.chat.invoke(
                     app_id=conf["dify_id"],
                     query=message,
                     inputs={},
                     response_mode="blocking",
-                    conversation_id=conversation_id
+                    conversation_id=conversation_id,
                 )
 
                 logger.debug(f"start_workflow:response: {response}")
@@ -188,12 +224,38 @@ class NwSlackEndpoint(Endpoint):
             elif conf["dify_type"] == "workflow":
                 # then try to invoke a workflow, this is currently broken since workflows require input
                 response = self.session.app.workflow.invoke(
-                    app_id=conf["dify_id"],
-                    inputs={},
-                    response_mode="blocking"
+                    app_id=conf["dify_id"], inputs={}, response_mode="blocking"
                 )
 
                 logger.info(response)
         except Exception as e:
             logger.error(e, stack_info=True)
             return {"answer": f"Exception: {e}"}
+
+    def _get_conversation_id(self, channel_id: str, thread_ts: str):
+        key = channel_id + "-" + thread_ts
+        try:
+            if self.session.storage.exist(key):
+                stored_data = self.session.storage.get(key)
+                conversation_id = stored_data.decode("utf-8")
+                logger.debug(f"Got conv_id: f{conversation_id[:8]}")
+
+                return conversation_id
+            else:
+                logger.debug(f"No conversation id for {thread_ts}")
+                return None
+        except Exception as e:
+            logger.warning(f"Get conv id warning: {str(e)}")
+            return None
+
+    def _save_conversation_id(
+        self, channel_id: str, thread_ts: str, conversation_id: str
+    ):
+        key = channel_id + "-" + thread_ts
+        try:
+            if self.session.storage.exist(key):
+                return
+            self.session.storage.set(key, conversation_id.encode("utf-8"))
+            logger.info(f"Set conv id {conversation_id[:8]} for thread {thread_ts}")
+        except Exception as e:
+            logger.exception("Error in conversation ID", e)
