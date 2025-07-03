@@ -83,6 +83,8 @@ class NwSlackEndpoint(Endpoint):
                     case "app_mention":
                         self.handle_mention(body=data, client=webclient)
                     case "message":
+                        pass
+                        self._save_message(data)
                         self.handle_dm(body=data, client=webclient)
             except SlackApiError as e:
                 logger.exception(e)
@@ -151,7 +153,7 @@ class NwSlackEndpoint(Endpoint):
         thread_ts = event["thread_ts"] if "thread_ts" in event else event["ts"]
 
         if sender_id not in self._slack_admins:
-            client.chat_postMessage(channel=receiver, text="Not an admin, sorry.")
+            # client.chat_postMessage(channel=receiver, text="Not an admin, sorry.")
             return
 
         if "get config" in message:
@@ -259,3 +261,13 @@ class NwSlackEndpoint(Endpoint):
             logger.info(f"Set conv id {conversation_id[:8]} for thread {thread_ts}")
         except Exception as e:
             logger.exception("Error in conversation ID", e)
+
+    def _save_message(self, message):
+        key = "debuglog"
+
+        if self.session.storage.exist(key):
+            data = json.loads(self.session.storage.get(key).decode("utf-8"))
+            data.append(message)
+            self.session.storage.set(key, json.dumps(data).encode(("utf-8")))
+        else:
+            self.session.storage.set(key, json.dumps([message]).encode("utf-8"))
