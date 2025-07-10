@@ -32,17 +32,13 @@ class NwSlackEndpoint(Endpoint):
         # set slack admins
         self._slack_admins = settings.get("slack_admin_ids").split(",")
 
-        # try to get config from storage
+        # try to get config from settings
         try:
-            config = self.session.storage.get(STORAGE_CONFIG_KEY)
-            self._slack_config = json.loads(config)
-        except json.JSONDecodeError:
-            self.session.storage.set(STORAGE_CONFIG_KEY, b"{}")
-            config = None
+            logger.debug(settings.get("channel_config", "[]"))
+            self._slack_config = json.loads(settings.get("channel_config", "[]"))
         except Exception as e:
-            logger.exception("Storage", e)
+            logger.exception(e)
             self._slack_config = None
-
         #
         # Slack stuff
         #
@@ -83,7 +79,6 @@ class NwSlackEndpoint(Endpoint):
                     case "app_mention":
                         self.handle_mention(body=data, client=webclient)
                     case "message":
-                        pass
                         self._save_message(data)
                         self.handle_dm(body=data, client=webclient)
             except SlackApiError as e:
@@ -171,34 +166,10 @@ class NwSlackEndpoint(Endpoint):
                 )
                 return
 
-        elif "set config" in message:
-            new_config = message.split("set config ")[1]
-            try:
-                json.loads(new_config)
-                logger.info(new_config)
-            except json.JSONDecodeError as e:
-                client.chat_postMessage(
-                    channel=receiver,
-                    thread_ts=thread_ts,
-                    text=f"Invalid JSON, try again.: {e}",
-                )
-                return
-
-            self.session.storage.set(STORAGE_CONFIG_KEY, new_config.encode("utf-8"))
-            client.chat_postMessage(
-                channel=receiver, thread_ts=thread_ts, text="Config saved!"
-            )
-            return
-
     def start_workflow(
         self, channel_id: str, message: str, conversation_id: str | None = None
     ):
         conf = None
-        if self._slack_config is None:
-            raise ConfigNotFound(
-                "Bot is unconfigured, or channel -> workflow mapping not found"
-            )
-
         for c in self._slack_config:
             if c["channel_id"] == channel_id:
                 conf = c

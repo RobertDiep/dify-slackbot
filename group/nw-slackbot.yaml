@@ -32,14 +32,15 @@ settings:
       pt_BR: Slack admin IDs
       ja_JP: Slack admin IDs
 
-  # - name: channel_config
-  #   type: text-input
-  #   required: true
-  #   label:
-  #     en_US: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
-  #     zh_Hans: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
-  #     pt_BR: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
-  #     ja_JP: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+  - name: channel_config
+    type: text-input
+    required: true
+    default: '[]'
+    label:
+      en_US: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+      zh_Hans: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+      pt_BR: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
+      ja_JP: "JSON channel -> app/workflow config. {\"channel_id\": \"app_id\", etc.}"
   
 endpoints:
   - endpoints/nw-slackbot.yaml

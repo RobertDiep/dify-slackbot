@@ -1,4 +1,4 @@
-version: 0.0.4
+version: 0.0.6
 type: plugin
 author: rdiepeveen
 name: nw-slackbot
@@ -37,7 +37,7 @@ plugins:
   endpoints:
     - group/nw-slackbot.yaml
 meta:
-  version: 0.0.2
+  version: 0.0.6
   arch:
     - amd64
     - arm64
@@ -45,6 +45,7 @@ meta:
     language: python
     version: "3.12"
     entrypoint: main
+  minimum_dify_version: 1.4.0
 created_at: 2025-04-10T15:54:12.375054+02:00
 privacy: PRIVACY.md
 verified: false
