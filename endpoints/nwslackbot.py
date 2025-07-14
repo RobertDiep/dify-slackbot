@@ -1,6 +1,5 @@
 import logging
 import json
-import threading
 import re
 
 from dify_plugin import Endpoint
@@ -11,7 +10,7 @@ from collections.abc import Mapping
 from werkzeug import Request, Response
 
 from .utils import is_dm, is_self_event
-
+from markdown_to_mrkdwn import SlackMarkdownConverter
 
 class ConfigNotFound(Exception):
     pass
@@ -25,7 +24,7 @@ logger = logging.getLogger(__name__)
 class NwSlackEndpoint(Endpoint):
     def __init__(self, session):
         super().__init__(session)
-        self.lock = threading.Lock()
+        self.converter = SlackMarkdownConverter()
 
     def _invoke(self, r: Request, values: Mapping, settings: Mapping) -> Response:
         logger.info(r)
@@ -127,7 +126,7 @@ class NwSlackEndpoint(Endpoint):
         logger.debug(f"Posting response {answer['answer']}")
 
         client.chat_postMessage(
-            text=f"<@{user_id}>, {answer['answer']}",
+            text=self.converter.convert(f"<@{user_id}>, {answer['answer']}"),
             thread_ts=msg_ts,
             channel=channel_id,
             metadata=metadata,
@@ -156,7 +155,7 @@ class NwSlackEndpoint(Endpoint):
                 config = self.session.storage.get("config").decode()
                 logger.info(config)
                 client.chat_postMessage(
-                    channel=receiver, thread_ts=thread_ts, text=config
+                    channel=receiver, thread_ts=thread_ts, text=f"`{config}`"
                 )
                 return
             except Exception as e:

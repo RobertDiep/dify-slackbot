@@ -51,6 +51,16 @@ parameters:
     llm_description: The text message content to send to the specified Slack channel.
     form: llm
   
+  - name: markdown
+    type: boolean
+    label: 
+      en_US: markdown
+    human_description:
+      en_US: Should the message be converted to markdown?
+    form: llm
+    required: true
+    default: true
+
   - name: thread_ts
     type: string
     required: false
@@ -65,7 +75,6 @@ parameters:
       zh_Hans: Slack 线程TS
       ja_JP: Slack スレッドTS
     llm_description: The unique timestamp (TS) identifying the Slack thread where the message should be posted.
-
     form: llm
 
 extra:

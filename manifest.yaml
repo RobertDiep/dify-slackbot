@@ -1,6 +1,6 @@
-version: 0.0.7
+version: 0.0.8
 type: plugin
-author: rdiepeveen
+author: robertdiep
 name: nw-slackbot
 label:
   en_US: nw-slackbot
@@ -39,7 +39,7 @@ plugins:
   tools:
     - provider/nw-slackpost.yaml  
 meta:
-  version: 0.0.7
+  version: 0.0.8
   arch:
     - amd64
     - arm64
