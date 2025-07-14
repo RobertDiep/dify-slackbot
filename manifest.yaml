@@ -36,8 +36,10 @@ resource:
 plugins:
   endpoints:
     - group/nw-slackbot.yaml
+  tools:
+    - provider/nw-slackpost.yaml  
 meta:
-  version: 0.0.6
+  version: 0.0.7
   arch:
     - amd64
     - arm64

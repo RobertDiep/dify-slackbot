@@ -1,0 +1,73 @@
+identity:
+  name: "Slack"
+  author: "robertdiep"
+  label:
+    en_US: "Post to Slack"
+    zh_Hans: "nw-slackpost"
+    pt_BR: "nw-slackpost"
+description:
+  human:
+    en_US: "Send slack messages to channel"
+    zh_Hans: "Send slack messages to channel"
+    pt_BR: "Send slack messages to channel"
+  llm: "Send slack messages to channel"
+
+output_schema:
+  type: object
+  properties:
+    msg_ts:
+      type: string
+
+parameters:
+  - name: channel_id
+    type: string
+    required: true
+    label:
+      en_US: channel_id
+      pt_BR: channel_id
+      zh_Hans: channel_id
+      ja_JP: channel_id
+    human_description:
+      en_US: Slack channel ID
+      pt_BR: Slack channel ID
+      zh_Hans: Slack 频道ID
+      ja_JP: Slack チャンネルID
+    llm_description: The unique identifier or name of the Slack channel where the message will be posted.
+    form: llm
+
+  - name: content
+    type: string
+    required: true
+    label:
+      en_US: content
+      pt_BR: content
+      zh_Hans: content
+      ja_JP: content
+    human_description:
+      en_US: Content to be sent to the channel
+      pt_BR: Conteúdo a ser enviado para o canal
+      zh_Hans: 要发送到频道的消息内容
+      ja_JP: チャンネルに投稿するメッセージ内容
+    llm_description: The text message content to send to the specified Slack channel.
+    form: llm
+  
+  - name: thread_ts
+    type: string
+    required: false
+    label:
+      en_US: thread_ts
+      pt_BR: thread_ts
+      zh_Hans: thread_ts
+      ja_JP: thread_ts
+    human_description:
+      en_US: Slack thread TS
+      pt_BR: Slack thread TS
+      zh_Hans: Slack 线程TS
+      ja_JP: Slack スレッドTS
+    llm_description: The unique timestamp (TS) identifying the Slack thread where the message should be posted.
+
+    form: llm
+
+extra:
+  python:
+    source: tools/nw-slackpost.py

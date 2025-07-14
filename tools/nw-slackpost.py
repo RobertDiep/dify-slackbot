@@ -1,0 +1,41 @@
+from collections.abc import Generator
+from typing import Any
+
+from dify_plugin import Tool
+from dify_plugin.entities.tool import ToolInvokeMessage
+from slack_sdk import WebClient
+
+
+class NwSlackpostTool(Tool):
+    def _invoke(self, tool_parameters: dict[str, Any]) -> Generator[ToolInvokeMessage]:
+        try:
+            bot_token = self.runtime.credentials['bot_token']
+        except KeyError:
+            raise Exception("Slack bot token not configured")
+
+        channel = tool_parameters.get("channel_id")
+        content = tool_parameters.get("content")
+        thread = tool_parameters.get("thread_ts", None)
+
+        if not channel or not content:
+            raise Exception("Channel or content is empty, cannot post empty content to empty channel.")
+        try:
+            webclient = WebClient(token=bot_token)
+            if thread is not None:
+                msg = webclient.chat_postMessage(
+                    channel=channel,
+                    text=content,
+                    thread_ts=thread
+                )
+            else:
+                msg = webclient.chat_postMessage(
+                    channel=channel,
+                    text=content
+                )
+
+            yield self.create_variable_message("msg_ts", msg["ts"])
+
+        except Exception as e:
+            yield self.create_text_message(f"Failed to send message {str(e)}")
+
+        yield self.create_text_message("Message sent succesfully")
